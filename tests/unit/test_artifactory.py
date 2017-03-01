@@ -2,8 +2,7 @@
 from urllib.request import urlopen
 
 import pytest
-import yaml
-from flask import url_for, Flask
+import json
 
 from . import assert_warn
 from crosspm.adapters.artifactory import Adapter
@@ -11,6 +10,12 @@ from crosspm.helpers.config import Config
 
 _adapter = None
 _config = None
+
+
+@pytest.fixture(scope='module')
+def app():
+    from tests.repo.server import app
+    return app
 
 
 @pytest.mark.usefixtures('live_server')
@@ -97,21 +102,30 @@ class TestArtifactory:
         _adapter = _config._adapters.get('jfrog-artifactory', None)
         assert isinstance(_adapter, Adapter)
 
-    # @pytest.fixture()
+    # @pytest.fixture(scope='class', autouse=True)
     # def app(self):
-    #     from tests.repo.server import app
-    #     return app
-
-    # @pytest.fixture()
-    # def app(self):
-    #     app = Flask(__name__)
-    #     return app
+    #    from tests.repo.server import app
+    #    return app
 
     # @pytest.mark.usefixtures('live_server')
-    def test__init(self):  # , live_server):
+    def test__init(self, live_server):
         # live_server.start()
-        #print(live_server.url())
+        # print(live_server.url())
 
-        res = urlopen(url_for('artifactory', _external=True))
-        # res = client.get('/')
-        # assert res is not None
+        res = urlopen(live_server.url())
+        # res = urlopen(url_for('index', _external=True))
+        res_data = json.loads(res.read().decode(encoding="utf-8"))
+        assert res_data == {'success': True, 'message': 'Test API connection'}
+
+        print(res)
+
+    def test__artifactory(self, live_server):
+        # live_server.start()
+        # print(live_server.url())
+
+        res = urlopen(live_server.url() + '/artifactory')
+        # res = urlopen(url_for('artifactory', _external=True))
+        res_data = json.loads(res.read().decode(encoding="utf-8"))
+        assert res_data == {'success': True, 'message': 'Artifactory ROOT'}
+
+        print(res)
