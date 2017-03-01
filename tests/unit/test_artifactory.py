@@ -107,9 +107,7 @@ class TestArtifactory:
     #    from tests.repo.server import app
     #    return app
 
-    # @pytest.mark.usefixtures('live_server')
     def test__init(self, live_server):
-        # live_server.start()
         # print(live_server.url())
 
         res = urlopen(live_server.url())
@@ -120,7 +118,6 @@ class TestArtifactory:
         print(res)
 
     def test__artifactory(self, live_server):
-        # live_server.start()
         # print(live_server.url())
 
         res = urlopen(live_server.url() + '/artifactory')
