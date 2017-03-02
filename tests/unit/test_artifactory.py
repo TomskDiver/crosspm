@@ -14,7 +14,7 @@ _config = None
 
 @pytest.fixture(scope='module')
 def app():
-    from tests.repo.server import app
+    from tests.repo.artifactory.server import app
     return app
 
 
