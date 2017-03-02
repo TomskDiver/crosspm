@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from urllib.request import urlopen
+from urllib.request import urlopen, urljoin
 
 import pytest
 import json
@@ -102,26 +102,29 @@ class TestArtifactory:
         _adapter = _config._adapters.get('jfrog-artifactory', None)
         assert isinstance(_adapter, Adapter)
 
-    # @pytest.fixture(scope='class', autouse=True)
-    # def app(self):
-    #    from tests.repo.server import app
-    #    return app
+    def change_source(self, live_server):
+        global _config
+        if _config is not None:
+            _sources = getattr(_config, '_sources', None)
+            if (_sources is not None) and (isinstance(_sources, (list, tuple))):
+                for _src in _sources:
+                    _args = getattr(_src, 'args', None)
+                    if (_args is not None) and (isinstance(_args, dict)):
+                        _args['server'] = urljoin(live_server.url(), '/artifactory')
 
     def test__init(self, live_server):
-        # print(live_server.url())
+        self.change_source(live_server)
 
         res = urlopen(live_server.url())
-        # res = urlopen(url_for('index', _external=True))
         res_data = json.loads(res.read().decode(encoding="utf-8"))
         assert res_data == {'success': True, 'message': 'Test API connection'}
 
         print(res)
 
     def test__artifactory(self, live_server):
-        # print(live_server.url())
+        self.change_source(live_server)
 
-        res = urlopen(live_server.url() + '/artifactory')
-        # res = urlopen(url_for('artifactory', _external=True))
+        res = urlopen(urljoin(live_server.url(), '/artifactory'))
         res_data = json.loads(res.read().decode(encoding="utf-8"))
         assert res_data == {'success': True, 'message': 'Artifactory ROOT'}
 
