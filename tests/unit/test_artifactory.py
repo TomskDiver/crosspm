@@ -4,7 +4,7 @@ from urllib.request import urlopen, urljoin
 import pytest
 import json
 
-from . import assert_warn
+# from . import assert_warn
 from crosspm.adapters.artifactory import Adapter
 from crosspm.helpers.config import Config
 
