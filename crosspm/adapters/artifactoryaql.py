@@ -1,102 +1,45 @@
 # -*- coding: utf-8 -*-
 import json
-import shutil
-import pathlib
+import time
+import os
+import requests
+from requests.auth import HTTPBasicAuth
+from datetime import datetime
 from crosspm.adapters.common import BaseAdapter
+from artifactory import ArtifactoryPath
 from crosspm.helpers.exceptions import *
 from crosspm.helpers.package import Package
-import os
 
 CHUNK_SIZE = 1024
 
 setup = {
     "name": [
-        "files",
+        "artifactory-aql",
+        "jfrog-artifactory-aql",
     ],
 }
 
 
-# class PureFilesPath(pathlib.PurePath):
-#     """
-#     A class to work with Files paths that doesn't connect
-#     to any server. I.e. it supports only basic path
-#     operations.
-#     """
-#     _flavour = pathlib._posix_flavour
-#     __slots__ = ()
-#
-
-class FilesPath(pathlib.Path):  # , PureFilesPath):
-    def glob(self, pattern):
-        return super(FilesPath, self).glob(pattern)
-
-    def rglob(self, pattern):
-        return super(FilesPath, self).rglob(pattern)
-
-    def __new__(cls, *args, **kwargs):
-        cls = WindowsPath if os.name == 'nt' else PosixPath
-        obj = pathlib.Path.__new__(cls, *args, **kwargs)
-        return obj
-
-    @property
-    def properties(self):
-        """
-        Fetch artifact properties
-        """
-        return {}
-
-    @properties.setter
-    def properties(self, properties):
-        self.del_properties(self.properties, recursive=False)
-        self.set_properties(properties, recursive=False)
-
-    @properties.deleter
-    def properties(self):
-        self.del_properties(self.properties, recursive=False)
-
-    def set_properties(self, properties, recursive=True):
-        """
-        Adds new or modifies existing properties listed in properties
-
-        properties - is a dict which contains the property names and values to set.
-                     Property values can be a list or tuple to set multiple values
-                     for a key.
-        recursive  - on folders property attachment is recursive by default. It is
-                     possible to force recursive behavior.
-        """
-        if not properties:
-            return False
-
-        return True  # self._accessor.set_properties(self, properties, recursive)
-
-    def del_properties(self, properties, recursive=None):
-        """
-        Delete properties listed in properties
-
-        properties - iterable contains the property names to delete. If it is an
-                     str it will be casted to tuple.
-        recursive  - on folders property attachment is recursive by default. It is
-                     possible to force recursive behavior.
-        """
-        return True  # self._accessor.del_properties(self, properties, recursive)
-
-
-class PosixPath(FilesPath, pathlib.PurePosixPath):
-    __slots__ = ()
-
-
-class WindowsPath(FilesPath, pathlib.PureWindowsPath):
-    __slots__ = ()
-
-    def owner(self):
-        raise NotImplementedError("Path.owner() is unsupported on this system")
-
-    def group(self):
-        raise NotImplementedError("Path.group() is unsupported on this system")
-
-
 class Adapter(BaseAdapter):
     def get_packages(self, source, parser, downloader, list_or_file_path):
+        _auth_type = source.args['auth_type'].lower() if 'auth_type' in source.args else 'simple'
+        _art_auth_etc = {}
+        if 'auth' in source.args:
+            if _auth_type == 'simple':
+                _art_auth_etc['auth'] = HTTPBasicAuth(*tuple(source.args['auth']))
+                # elif _auth_type == 'cert':
+                #     _art_auth_etc['cert'] = os.path.realpath(os.path.expanduser(source.args['auth']))
+        if 'auth' not in _art_auth_etc:
+            msg = 'You have to set auth parameter for sources with artifactory-aql adapter'
+            # self._log.error(msg)
+            raise CrosspmException(
+                CROSSPM_ERRORCODE_ADAPTER_ERROR,
+                msg
+            )
+
+        if 'verify' in source.args:
+            _art_auth_etc['verify'] = source.args['verify'].lower in ['true', 'yes', '1']
+
         _pkg_name_col = self._config.name_column
         _packages_found = {}
         _pkg_name_old = ""
@@ -117,19 +60,56 @@ class Adapter(BaseAdapter):
                 for _path in _sub_paths['paths']:
                     _tmp_params = dict(_paths['params'])
                     _tmp_params['repo'] = _sub_paths['repo']
-
-                    _path_fixed, _path_pattern = parser.split_fixed_pattern(_path)
-                    _repo_paths = FilesPath(_path_fixed)
+                    _path_fixed, _path_pattern, _file_name_pattern = parser.split_fixed_pattern_with_file_name(_path)
                     try:
-                        for _repo_path in _repo_paths.glob(_path_pattern):
+                        _artifactory_server = _tmp_params['server']
+                        _search_repo = _tmp_params['repo']
+
+                        # Get AQL path pattern, with fixed part path, without artifactory url and repository name
+                        _aql_path_pattern = _path_fixed[len(_artifactory_server) + 1 + len(_search_repo) + 1:]
+                        if _path_pattern:
+                            _aql_path_pattern = _aql_path_pattern + "/" + _path_pattern
+
+                        _aql_query_url = '{}/api/search/aql'.format(_artifactory_server)
+                        _aql_query_dict = {
+                            "repo": {
+                                "$eq": _search_repo,
+                            },
+                            "path": {
+                                "$match": _aql_path_pattern,
+                            },
+                            "name": {
+                                "$match": _file_name_pattern,
+                            },
+                        }
+                        _art_auth_etc['data'] = 'items.find({query_dict}).include("*", "property")'.format(
+                            query_dict=json.dumps(_aql_query_dict))
+                        r = requests.post(_aql_query_url, **_art_auth_etc)
+                        r.raise_for_status()
+
+                        _found_paths = r.json()
+                        for _found in _found_paths['results']:
+                            _repo_path = "{artifactory}/{repo}/{path}/{file_name}".format(
+                                artifactory=_artifactory_server,
+                                repo=_found['repo'],
+                                path=_found['path'],
+                                file_name=_found['name'])
+                            _repo_path = ArtifactoryPath(_repo_path, **_art_auth_etc)
+
                             _mark = 'found'
                             _matched, _params, _params_raw = parser.validate_path(str(_repo_path), _tmp_params)
                             if _matched:
                                 _params_found[_repo_path] = {k: v for k, v in _params.items()}
                                 _params_found_raw[_repo_path] = {k: v for k, v in _params_raw.items()}
                                 _mark = 'match'
-                                _valid, _params = parser.validate(_repo_path.properties, 'properties', _tmp_params,
-                                                                  return_params=True)
+
+                                # TODO: _params_raw
+                                if parser.has_rule('properties'):
+                                    _found_properties = {x['key']: x.get('value', '') for x in _found['properties']}
+                                    _valid, _params = parser.validate(_found_properties, 'properties', _tmp_params,
+                                                                      return_params=True)
+                                else:
+                                    _valid, _params = True, {}
                                 if _valid:
                                     _mark = 'valid'
                                     _packages += [_repo_path]
@@ -142,13 +122,13 @@ class Adapter(BaseAdapter):
                         except:
                             err = {}
                         if isinstance(err, dict):
-                            # TODO: Check errors
-                            # e.args[0] = '''{
-                            #                   "errors" : [ {
+                            # Check errors
+                            # :e.args[0]: {
+                            #                 "errors" : [ {
                             #                     "status" : 404,
                             #                     "message" : "Not Found"
-                            #                   } ]
-                            #                 }'''
+                            #                  } ]
+                            #             }
                             for error in err.get('errors', []):
                                 err_status = error.get('status', -1)
                                 err_msg = error.get('message', '')
@@ -224,8 +204,12 @@ class Adapter(BaseAdapter):
         _stat_attr = {'ctime': 'st_atime',
                       'mtime': 'st_mtime',
                       'size': 'st_size'}
-        _stat_pkg = os.stat(str(package))
-        _stat_pkg = {k: getattr(_stat_pkg, v, None) for k, v in _stat_attr.items()}
+        _stat_pkg = package.stat()
+        _stat_pkg = {k: getattr(_stat_pkg, k, None) for k in _stat_attr.keys()}
+        _stat_pkg = {
+            k: time.mktime(v.timetuple()) + float(v.microsecond) / 1000000.0 if isinstance(v, datetime) else v
+            for k, v in _stat_pkg.items()
+        }
         return _stat_pkg
 
     def download_package(self, package, dest_path):
@@ -238,7 +222,17 @@ class Adapter(BaseAdapter):
 
         try:
             _stat_pkg = self.pkg_stat(package)
-            shutil.copyfile(str(package), dest_path)
+            # with package.open() as _src:
+            _src = requests.get(str(package), auth=package.auth, verify=package.verify, stream=True)
+            _src.raise_for_status()
+
+            with open(dest_path, 'wb+') as _dest:
+                for chunk in _src.iter_content(CHUNK_SIZE):
+                    if chunk:  # filter out keep-alive new chunks
+                        _dest.write(chunk)
+                        _dest.flush()
+
+            _src.close()
             os.utime(dest_path, (_stat_pkg['ctime'], _stat_pkg['mtime']))
 
         except Exception as e:
@@ -253,12 +247,12 @@ class Adapter(BaseAdapter):
 
     @staticmethod
     def get_package_filename(package):
-        if isinstance(package, FilesPath):
+        if isinstance(package, ArtifactoryPath):
             return package.name
         return ''
 
     @staticmethod
     def get_package_path(package):
-        if isinstance(package, FilesPath):
+        if isinstance(package, ArtifactoryPath):
             return str(package)
         return ''

@@ -8,19 +8,19 @@ from crosspm.helpers.archive import Archive
 from crosspm.helpers.exceptions import *
 
 
-class Package(object):
-    _packed_path = ''
-    _unpacked_path = ''
-    packages = {}
-    _raw = []
-    _root = False
-    _params_found = {}
-    stat = None
-    _not_cached = True
-
-    def __init__(self, name, pkg, params, downloader, adapter, parser, params_found=None, stat=None):
+class Package:
+    def __init__(self, name, pkg, params, downloader, adapter, parser, params_found=None, params_found_raw=None,
+                 stat=None):
+        self._packed_path = ''
+        self._unpacked_path = ''
+        self.packages = {}
+        self._raw = []
+        self._root = False
+        self._params_found = {}
+        self._params_found_raw = {}
+        self._not_cached = True
         self._log = logging.getLogger('crosspm')
-        if type(pkg) is int:
+        if isinstance(pkg, int):
             if pkg == 0:
                 self._root = True
         self._name = name
@@ -31,6 +31,8 @@ class Package(object):
         self._downloader = downloader
         if params_found:
             self._params_found = params_found
+        if params_found_raw:
+            self._params_found_raw = params_found_raw
         self.stat = stat
 
     def download(self, force=False):
@@ -71,7 +73,7 @@ class Package(object):
 
     def find_dependencies(self, depslock_file_path):
         self._raw = [x for x in self._parser.iter_packages_params(depslock_file_path)]
-        self.packages = self._downloader.get_packages(self._raw)
+        self.packages = self._downloader.get_packages({'raw': self._raw})
 
     def unpack(self, dest_path='', force=False):
         if self._downloader.solid(self):
@@ -124,7 +126,8 @@ class Package(object):
                 _sign = '-'
         _left = '{}{}'.format(' ' * 4 * level, _sign)
         do_print(_left)
-        for _pkg_name, _pkg in self.packages.items():
+        for _pkg_name in sorted(self.packages, key=lambda x: str(x).lower()):
+            _pkg = self.packages[_pkg_name]
             if not _pkg:
                 _left = '{}-'.format(' ' * 4 * (level + 1))
                 self._log.info('{}{}'.format(_left, _pkg_name))
@@ -138,7 +141,7 @@ class Package(object):
             return self._name
         return self._name, self._unpacked_path
 
-    def get_params(self, param_list=None, get_path=False, merged=False):
+    def get_params(self, param_list=None, get_path=False, merged=False, raw=False):
         if param_list and isinstance(param_list, str):
             result = {param_list: self._name}
         elif param_list and isinstance(param_list, (list, tuple)):
@@ -151,6 +154,8 @@ class Package(object):
             result['path'] = self._unpacked_path
         if merged:
             result.update(self._parser.merge_valued(result))
+        if raw:
+            result.update({k: v for k, v in self._params_found_raw.items()})
         return result
 
     def set_full_unique_name(self):
